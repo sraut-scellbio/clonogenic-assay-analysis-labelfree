@@ -1,0 +1,77 @@
+# Ignore output and results directories
+output/
+example_out/
+results/
+images/
+Images/
+template/
+templates/
+
+# Ignore data directories
+Data/
+data/
+
+# Ignore model directories and checkpoints
+models/
+pretrained_models/
+*.ckpt  # PyTorch Lightning model checkpoints
+*.pth   # PyTorch model weights
+*.pt    # PyTorch saved models
+
+# Ignore logs and temporary files
+*.log
+*.out
+*.err
+*.tmp
+*.bak
+
+# Ignore Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Ignore IDE and editor config files
+.idea/
+.vscode/
+*.swp  # Vim swap files
+*.swo  # Vim swap files
+
+# Ignore compiled Python files
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
+
+# Ignore text files (if needed)
+*.txt
+
+# Ignore all image formats
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.tiff
+*.tif
+*.svg
+*.webp
+
+# Ignore spreadsheet and data files
+*.csv
+*.xlsx
+*.xls
+*.json
+*.xml
+*.parquet
+*.feather
+*.h5
+*.hdf5
+
+# Ignore PyTorch logs and debugging files
+lightning_logs/
+wandb/
+checkpoints/
+logs/
+test/
+tensorboard/
+debug.log
+profile.log
+event.out.*
