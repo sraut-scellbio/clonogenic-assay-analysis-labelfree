@@ -17,7 +17,7 @@ from preprocessing.helpers.io_utils import read_json_file
 
 if __name__ == "__main__":
     metadata_paths = [
-        'data/organized/06_30_25_CT2_evos_SCB_bub-test_None_2025-07-07_13-53-27/CT2/results/roi_frames/metadata.json'
+        'data/organized/C351_U87_cyt/results/roi_frames/metadata.json'
     ]
 
 
@@ -36,13 +36,10 @@ if __name__ == "__main__":
         params["device_ID"] = device_dir.name
         frame_type = metadata_path.parent.name
         results_dir = device_dir / 'results' / frame_type
-        # wells = ["A4", "A5", "A6", "D1", "D5", "D6", "A9", "A10", "A11", "D9"]
-        # wells = ["A3", "A5", "A6", "D1", "D2", "D3", "A7", "A8", "A9", "D8"]
-        wells = ["E6", "E7"]
         for well_fldpath in metadata_path.parent.iterdir():
-            if well_fldpath.is_dir() and well_fldpath.name in wells:
+            if well_fldpath.is_dir():
                 indv_analysis.save_per_day_summary(well_fldpath, params)
-                tracking_analysis.process_well_predictions(well_fldpath)
+                # tracking_analysis.process_well_predictions(well_fldpath)
 
 
         # # create clonogeninc index heatmap

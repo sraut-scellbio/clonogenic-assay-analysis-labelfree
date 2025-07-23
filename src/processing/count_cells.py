@@ -1,5 +1,6 @@
 import csv
 import pdb
+from concurrent.futures import ThreadPoolExecutor
 from typing import List, Tuple
 
 import cv2
@@ -7,14 +8,19 @@ import math
 import numpy as np
 from pathlib import Path
 
+import matplotlib
 from matplotlib import pyplot as plt
+import matplotlib.cm as cm
 from preprocessing.coeffs.sc_filter_params import area_coeffs
 from preprocessing.helpers.processing_utils import disp_img
 from processing.estimate_counts_area_ar import count_tpr_optimized
 
 import warnings
 
+from skimage.measure import regionprops
+
 warnings.filterwarnings("ignore", message="X does not have valid feature names.*")
+# matplotlib.use('Agg')
 
 def draw_contours(img, contours):
     if not isinstance(img, np.ndarray):
@@ -137,9 +143,9 @@ def save_cell_counts_combined(
 
     if out_dir is not None:
         out_dir.mkdir(parents=True, exist_ok=True)
-        csv_filename_combined = out_dir / f"{image_name}_dual_counts.csv"
+        csv_filename_combined = out_dir / f"{image_name}_counts.csv"
     else:
-        csv_filename_combined = f"{image_name}_dual_counts.csv"
+        csv_filename_combined = f"{image_name}_counts.csv"
 
     combined_data = []
 
@@ -294,146 +300,259 @@ def save_cell_counts_labelfree(
     tile_norm_blocksize,
     lf_img_path: str,
     well_locs: List[Tuple[int, int]],
+    cell_line,
+    microns_per_pixel,
     well_width_pixels: int,
     out_dir=None,
-    debug=False,
     write_results=False,
     save_masks_for_training=True,
-    save_flows=True
+    save_flows=True,
+    debug=False
 ):
-
     if lf_model is None:
         print(f"Label-free segmentation model has not been provided.")
         return
 
-    # Load brightfield image
+    min_area_in_pixels = area_coeffs[cell_line]['min'] / (microns_per_pixel ** 2)
+    avg_area_in_pixels = area_coeffs[cell_line]['mu'] / (microns_per_pixel ** 2)
+
+    # Load image
     bf_img = cv2.imread(str(lf_img_path), cv2.IMREAD_GRAYSCALE)
     if bf_img is None:
         raise ValueError(f"Image not found or unreadable: {lf_img_path}")
 
-    half_width = round(well_width_pixels // 2)
     image_name = Path(lf_img_path).stem
-    combined_data = []
+    out_dir = Path(out_dir) if out_dir else Path(".")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    csv_filename_combined = out_dir / f"{image_name}_counts.csv"
 
-    # Optional output CSV setup
-    if out_dir is not None:
-        out_dir = Path(out_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        csv_filename_combined = out_dir / f"{image_name}_labelfree_counts.csv"
-    else:
-        csv_filename_combined = f"{image_name}_labelfree_counts.csv"
+    half_width = round(well_width_pixels // 2)
 
-    # Batch crop all wells first (faster inference)
-    crops = []
-    crop_meta = []
-    for (x_w, y_w) in well_locs:
-        x1 = max(x_w - half_width, 0)
-        y1 = max(y_w - half_width, 0)
-        x2 = min(x_w + half_width, bf_img.shape[1])
-        y2 = min(y_w + half_width, bf_img.shape[0])
+    def process_crop(well_coord):
+        x_w, y_w = well_coord
+        x1, y1 = max(x_w - half_width, 0), max(y_w - half_width, 0)
+        x2, y2 = min(x_w + half_width, bf_img.shape[1]), min(y_w + half_width, bf_img.shape[0])
         cropped = bf_img[y1:y2, x1:x2]
         resized = cv2.resize(cropped, (256, 256), interpolation=cv2.INTER_LINEAR)
-        crops.append(resized)
-        crop_meta.append((x_w, y_w, cropped, resized))
+        return x_w, y_w, cropped, resized
 
+    # Use ThreadPoolExecutor for I/O-safe parallelism
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        crop_meta = list(executor.map(lambda coord: process_crop(coord), well_locs))
 
-    # Predict masks in batch using Cellpose-SAM
-    masks_list, flows_list, _ = lf_model.eval(crops, channels=[0, 0], batch_size=32,
-                                     flow_threshold=flow_threshold, cellprob_threshold=cellprob_threshold,
-                                     normalize={"tile_norm_blocksize": tile_norm_blocksize}
-                                     )
+    crops = [resized for (_, _, _, resized) in crop_meta]
 
-    # Process masks and classify wells
-    for i, ((x_w, y_w, cropped, resized), mask) in enumerate(zip(crop_meta, masks_list)):
-        num_cells = int(np.max(mask)) if mask is not None else 0
+    print(f"Detecting cells for frame {lf_img_path} with cellpose.")
+    masks_list, flows_list, _ = lf_model.eval(
+        crops,
+        batch_size=64,
+        flow_threshold=flow_threshold,
+        cellprob_threshold=cellprob_threshold,
+        normalize={"tile_norm_blocksize": tile_norm_blocksize}
+    )
 
-        # Classify based on number of cells
-        if num_cells == 0:
-            label = 'empty'
-        elif num_cells == 1:
-            label = 'single'
-        elif num_cells == 2:
-            label = 'dublets'
-        elif num_cells == 3:
-            label = 'triplets'
-        elif num_cells == 4:
-            label = '4'
-        elif num_cells >= 10:
-            label = '10+'
-        elif num_cells >= 5:
-            label = '5+'
+    def process_well(i):
+        x_w, y_w, cropped, resized = crop_meta[i]
+        mask = masks_list[i]
+        flow = flows_list[i]
+        valid_cell_areas = []
+
+        resize_factor = resized.size / cropped.size
+
+        if mask is not None and np.max(mask) > 0:
+            props = regionprops(mask)
+            unknown_obj = False
+            for prop in props:
+                area = prop.area
+                perimeter = prop.perimeter if prop.perimeter > 0 else 1
+                circularity = 4 * np.pi * area / (perimeter ** 2)
+
+                is_large_enough = area >= 0.55 * avg_area_in_pixels*resize_factor
+                is_round_enough = circularity > 0.5  # you can tune this threshold
+
+                if is_large_enough and is_round_enough:
+                    valid_cell_areas.append(area)
+
+                # if object is large enough but not round enough
+                if is_large_enough and not is_round_enough:
+                    unknown_obj = True
+
+            num_cells = len(valid_cell_areas)
+            if num_cells == 0:
+                if not unknown_obj:
+                    label = 'empty'  # debris or all masks too irregular
+                    num_cells = 0
+                else:
+                    label = 'unknown'  # debris or all masks too irregular
+                    num_cells = -1
+            else:
+                # classification logic
+                if num_cells == 1:
+                    if not unknown_obj:
+                        label = 'single'  # debris or all masks too irregular
+                        num_cells = 1
+                    else:
+                        label = 'unknown'  # debris or all masks too irregular
+                        num_cells = -1
+                elif num_cells == 2:
+                    label = 'dublets'
+                elif num_cells == 3:
+                    label = 'triplets'
+                elif num_cells == 4:
+                    label = '4'
+                elif num_cells >= 10:
+                    label = '10+'
+                elif num_cells >= 5:
+                    label = '5+'
+                else:
+                    label = 'unknown'
+                    num_cells = -1
         else:
-            label = 'unknown'
+            label = 'empty'
+            num_cells = 0
 
-        combined_data.append([x_w, y_w, num_cells, label])
+        results = [x_w, y_w, num_cells, label]
 
-        if save_flows:
-            print(f"[{x_w}, {y_w}] → Count: {num_cells}, Class: {label}")
-
-            flow = flows_list[i]
-            prob_map = flow[0]
-            flow_map = flow[1]
-
-            fig, axes = plt.subplots(1, 4, figsize=(16, 4))
-            axes[0].imshow(resized, cmap='gray')
-            axes[0].set_title('Brightfield')
-            axes[0].axis('off')
-
-            if mask is not None:
-                axes[1].imshow(mask, cmap='nipy_spectral')
-                axes[1].set_title(f'Mask (n={num_cells})')
+        # Save training data and flows
+        if save_masks_for_training or save_flows:
+            if label in ["empty", "single", "unknown"]:
+                class_dir = out_dir / label
             else:
-                axes[1].imshow(np.zeros_like(resized), cmap='gray')
-                axes[1].set_title("Mask: None")
-
-            axes[1].axis('off')
-
-            axes[2].imshow(prob_map, cmap='viridis')
-            axes[2].set_title('Cell Prob Map')
-            axes[2].axis('off')
-
-            step = 5
-            h, w = resized.shape
-            Y, X = np.mgrid[0:h:step, 0:w:step]
-            U = flow_map[1][0:h:step, 0:w:step]
-            V = flow_map[0][0:h:step, 0:w:step]
-            axes[3].imshow(resized, cmap='gray')
-            axes[3].quiver(X, Y, U, -V, color='red', scale=20)
-            axes[3].set_title('Flow Field')
-            axes[3].axis('off')
-
-            plt.tight_layout()
-
-            if debug:
-                plt.show()
-            else:
-                flows_dir = Path(out_dir) / label / "flows"
-                flows_dir.mkdir(parents=True, exist_ok=True)
-                fig_path = flows_dir / f"{image_name}_x{x_w}_y{y_w}_flow_debug.png"
-                plt.savefig(fig_path, dpi=150)
-
-        if out_dir is not None:
-            class_dir = out_dir / label
-            if save_masks_for_training and class_dir is not None:
-                class_dir.mkdir(parents=True, exist_ok=True)
-                training_data_dir = Path(class_dir)
-                img_out_dir = training_data_dir / "images"
-                mask_out_dir = training_data_dir / "masks"
+                class_dir = out_dir / "non-single"
+            if save_masks_for_training:
+                img_out_dir = class_dir / "images"
+                mask_out_dir = class_dir / "masks"
                 img_out_dir.mkdir(parents=True, exist_ok=True)
                 mask_out_dir.mkdir(parents=True, exist_ok=True)
 
                 base_name = f"{image_name}_x{x_w}_y{y_w}"
-                img_path = img_out_dir / f"{base_name}.tif"
-                mask_path = mask_out_dir / f"{base_name}_mask.tif"
+                cv2.imwrite(str(img_out_dir / f"{base_name}.tif"), resized)
+                cv2.imwrite(str(mask_out_dir / f"{base_name}_mask.tif"), mask.astype(np.uint16))
 
-                # Save cropped brightfield image
-                cv2.imwrite(str(img_path), resized)
+            if save_flows:
+                flows_dir = class_dir / "flows"
+                flows_dir.mkdir(parents=True, exist_ok=True)
+                fig_path = flows_dir / f"{image_name}_x{x_w}_y{y_w}_flow_debug.png"
 
-                # Save instance mask (each cell has a unique label)
-                instance_mask = mask.astype(np.uint16)
-                cv2.imwrite(str(mask_path), instance_mask)
+                # use matplotlib for debugging
+                if debug:
+                    prob_map = flow[0]
+                    flow_map = flow[1]
 
-    # Save results to CSV
+                    fig, axes = plt.subplots(1, 4, figsize=(16, 6))
+                    axes[0].imshow(resized, cmap='gray')
+                    axes[0].set_title('Brightfield')
+                    axes[0].axis('off')
+
+                    # Mask image or blank fallback
+                    if mask is not None and np.any(mask):
+                        axes[1].imshow(mask, cmap='nipy_spectral')
+                        axes[1].set_title(f'Mask (n={num_cells})')
+                    else:
+                        axes[1].imshow(np.zeros_like(resized), cmap='gray')
+                        axes[1].set_title("Mask: None")
+
+                    axes[1].axis('off')
+
+                    # Cell probability map
+                    prob_map = np.nan_to_num(prob_map)
+                    axes[2].imshow(prob_map, cmap='viridis')
+                    axes[2].set_title('Cell Prob Map')
+                    axes[2].axis('off')
+
+                    # Flow field
+                    step = 5
+                    h, w = resized.shape
+                    Y, X = np.mgrid[0:h:step, 0:w:step]
+                    U = np.nan_to_num(flow_map[1][0:h:step, 0:w:step])
+                    V = np.nan_to_num(flow_map[0][0:h:step, 0:w:step])
+
+                    axes[3].imshow(resized, cmap='gray')
+                    axes[3].quiver(X, Y, U, -V, color='red', scale=20)
+                    axes[3].set_title('Flow Field')
+                    axes[3].axis('off')
+
+                    plt.tight_layout()
+                    try:
+                        plt.show()
+                    except Exception as e:
+                        print(f"Error saving flow figure at {fig_path}: {e}")
+                    plt.close(fig)
+
+                else:
+                    try:
+                        def visualize_instance_mask(mask, colormap=cv2.COLORMAP_JET):
+                            """
+                            Visualize instance mask with distinct colors and black background.
+                            """
+                            vis = np.zeros((*mask.shape, 3), dtype=np.uint8)  # RGB black canvas
+                            unique_ids = np.unique(mask)
+                            for uid in unique_ids:
+                                if uid == 0:
+                                    continue  # background stays black
+                                color = tuple(int(c) for c in np.random.randint(50, 255, size=3))  # bright color
+                                vis[mask == uid] = color
+                            return vis
+
+
+                        # Brightfield image (normalized, grayscale -> RGB)
+                        norm_bf = cv2.normalize(resized, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+                        bf_rgb = cv2.cvtColor(norm_bf, cv2.COLOR_GRAY2RGB)
+
+                        # Instance mask visualization (independent, no overlay)
+                        mask_rgb = visualize_instance_mask(mask)
+
+                        # Use Cellpose’s own probability map (already meaningful)
+                        prob_map = np.nan_to_num(flow[0])  # shape: (H, W), dtype: float32 or float64
+                        prob_norm = cv2.normalize(prob_map, None, 0.0, 1.0, cv2.NORM_MINMAX).astype(np.float32)
+                        colormap = cm.get_cmap('jet')  # Or 'rainbow'
+                        colored_map = colormap(prob_norm)
+                        prob_map = (colored_map[:, :, :3] * 255).astype(np.uint8)
+                        prob_rgb = cv2.cvtColor(prob_map, cv2.COLOR_RGB2BGR)
+
+                        # Flow field visualization (on top of brightfield)
+                        flow_rgb = bf_rgb.copy()
+                        step = 10
+                        h, w = resized.shape
+                        for y in range(0, h, step):
+                            for x in range(0, w, step):
+                                dx = int(flow[1][1][y, x] * 5)
+                                dy = int(flow[1][0][y, x] * 5)
+                                pt1 = (x, y)
+                                pt2 = (x + dx, y + dy)
+                                cv2.arrowedLine(flow_rgb, pt1, pt2, (255, 0, 0), 1, tipLength=0.3)  # Red arrows in RGB
+
+                        def resize_rgb(img):
+                            if img.shape[:2] != (256, 256):
+                                img = cv2.resize(img, (256, 256))
+                            return img
+
+                        final_vis = np.hstack([resize_rgb(bf_rgb), resize_rgb(mask_rgb)])
+                        # stack1 = np.hstack([resize_rgb(bf_rgb), resize_rgb(mask_rgb)])
+                        # stack2 = np.hstack([resize_rgb(prob_rgb), resize_rgb(flow_rgb)])
+                        # final_vis = np.vstack([stack1, stack2])
+
+                        # Save final RGB visualization
+                        if final_vis.ndim == 3 and final_vis.shape[2] == 3:
+                            # Already 3-channel image; OpenCV expects BGR when saving
+                            final_bgr = cv2.cvtColor(final_vis, cv2.COLOR_RGB2BGR)
+                        else:
+                            # Single-channel or unexpected shape
+                            final_bgr = final_vis
+
+                        cv2.imwrite(str(fig_path), final_bgr)
+
+                    except Exception as e:
+                        print(f"Error saving flow figure at {fig_path}: {e}")
+
+        return results
+
+    combined_data = []
+    for i in range(len(crop_meta)):
+        result = process_well(i)
+        combined_data.append(result)
+
+    # Save CSV results
     if write_results:
         with open(csv_filename_combined, 'w', newline='') as f:
             writer = csv.writer(f)

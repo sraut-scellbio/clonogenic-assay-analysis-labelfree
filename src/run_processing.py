@@ -31,10 +31,10 @@ from processing.count_cells import save_cell_counts_combined, save_cell_counts_l
 
 def save_raw_counts(well_fldpath: Union[Path, str],
          params_dict,
+         template,
          out_dir=None,
          debug_cell_count=False,
          debug_well_detection=False,
-         template_dir=None,
          model_dir=None
 )->Union [Path, str]:
 
@@ -46,22 +46,7 @@ def save_raw_counts(well_fldpath: Union[Path, str],
     well_width_pixels = well_width_microns / microns_per_pixel
     bridge_width_pixels = bridge_width_microns / microns_per_pixel
     cell_line = params_dict.get("cell_line", None)
-    well_template_path = os.path.join(template_dir, "well", "test", f"template_{film_version}.npy")
     model_path = os.path.join(model_dir, cell_line.lower(), "random_forests", 'model.pkl')
-
-    # load cell classification model and templates
-    model = None
-    try:
-        # Load cell classification model
-        model = joblib.load(model_path)
-        print(f"Loaded model from {model_path}")
-    except FileNotFoundError:
-        print(f"Model file not found at {model_path}. Setting model to None.")
-    except Exception as e:
-        print(f"Error loading model: {e}. Setting model to None.")
-
-    template = np.load(well_template_path).astype(np.uint8)
-    print(f"Well templates loaded from {well_template_path}. Template shape : {template.shape}.")
 
     # count cells for each day folder in the well folder
     start_sname = natsorted(os.listdir(well_fldpath))[0]   # get name of start day folder
@@ -99,9 +84,21 @@ def save_raw_counts(well_fldpath: Union[Path, str],
             # if fluroscent folder does not exist, set intensity to None
             if fluo_dir is None or not fluo_dir.exists():
                 print(f"Fluorescent directory not found. Cells will be counted using label free channel.")
+                model = None
                 avg_sc_intensity = None
                 cellpose_model = load_cellpose_model()
             else:
+                model = None
+                # load cell classification model and templates
+                try:
+                    # Load cell classification model
+                    model = joblib.load(model_path)
+                    print(f"Loaded model from {model_path}")
+                except FileNotFoundError:
+                    print(f"Model file not found at {model_path}. Setting model to None.")
+                except Exception as e:
+                    print(f"Error loading model: {e}. Setting model to None.")
+
                 avg_sc_intensity = get_avg_single_cell_intensity(
                     lf_dir,
                     fluo_dir,
@@ -149,9 +146,10 @@ def save_raw_counts(well_fldpath: Union[Path, str],
                                                         tile_norm_blocksize,
                                                         lf_img_path,
                                                         well_locs,
+                                                        cell_line,
+                                                        microns_per_pixel,
                                                         well_width_pixels,
                                                         out_dir=session_out_dir,
-                                                        debug=debug_cell_count,
                                                         write_results=True,
                                                         save_masks_for_training=True,
                                                         save_flows=True)
@@ -173,7 +171,10 @@ def save_raw_counts(well_fldpath: Union[Path, str],
 
 if __name__ == "__main__":
     metadata_paths = [
-        'data/organized/05_13_25_C351_cytation_SCB_U87-set1-2gy_U87_2025-05-24_16-38-20_training/C351/roi_frames/metadata.json'
+        'data/organized/C351_U87_cyt/roi_frames/metadata.json',
+        'data/organized/C353_U87_cyt/roi_frames/metadata.json',
+        'data/organized/C366_U87_evos/roi_frames/metadata.json',
+        'data/organized/C367_U87_evos/roi_frames/metadata.json'
     ]
 
     for metadata_path in metadata_paths:
@@ -196,14 +197,20 @@ if __name__ == "__main__":
         results_dir = device_dir / 'results' / frame_type
         os.makedirs(str(results_dir), exist_ok=True)
 
+        # load template for device
+        film_version = params.get("template", "v1").lower()
+        well_template_path = os.path.join(templates_dir, "well", "test", f"template_{film_version}.npy")
+        template = np.load(well_template_path).astype(np.uint8)
+        print(f"Well templates loaded from {well_template_path}. Template shape : {template.shape}.")
+
         for well_fldpath in metadata_path.parent.iterdir():
             if well_fldpath.is_dir():
                 print(f"\nProcessing: {well_fldpath.name}")
                 start_time = time.time()
                 save_raw_counts(well_fldpath, params,
+                                template=template,
                                 out_dir = results_dir,
                                 debug_cell_count=False,
-                                template_dir=templates_dir,
                                 debug_well_detection=False,
                                 model_dir=models_dir)
 
