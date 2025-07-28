@@ -1,3 +1,4 @@
+import numpy as np
 from preprocessing.coeffs.sc_filter_params import area_coeffs, aspect_ratio_coeffs, distr_coeffs
 
 # this workflow uses parameters that aim to lower false positives for singles
@@ -122,3 +123,50 @@ def count_tpr_optimized(cnt_area_in_pixels, cnt_ar, microns_per_pixel, cell_line
             if verbose: print(f"Workflow1: Area smller than average single cell. Value set to negative 255. Val set to -255.")
 
     return num_cells_in_contour
+
+
+# simplified counting for individual masks for labelfree
+def count_tpr_simple(prop, avg_area_in_pixels, resize_factor, well_area_in_pixels, verbose=False):
+    unknown_obj = False
+    area = prop.area
+    perimeter = prop.perimeter if prop.perimeter > 0 else 1
+    circularity = 4 * np.pi * area / (perimeter ** 2)
+
+    # calculate aspect ratio
+    min_row, min_col, max_row, max_col = prop.bbox
+    height = max_row - min_row
+    width = max_col - min_col
+    cnt_ar = width / height if height > 0 else 0
+
+    min_area =  0.55 * avg_area_in_pixels*resize_factor
+    max_area = 0.35 * well_area_in_pixels*resize_factor
+
+    if circularity >= 0.6:
+        # Rule 1: Too large area (> 35% of well)
+        if area > max_area:
+            if verbose: print("Area too large. Count = 0.")
+            return unknown_obj, 0
+
+        # Rule 2: Acceptable area
+        elif min_area <= area <= max_area:
+
+            # acceptable aspect ratio for single
+            if 0.55 < cnt_ar < 1.75:
+                if verbose: print("Acceptable area, but high AR. Count = 2.")
+                return unknown_obj, 1
+
+            # high ar might be a dublet
+            else:
+                if verbose: print("Acceptable area and AR. Count = 1.")
+                return unknown_obj, 2
+
+        # Rule 3: Too small area
+        else:
+            if verbose: print("Area too small. Count = 1.")
+            unknown_obj = True
+            return unknown_obj, 0
+
+    else:
+        unknown_obj = True
+        return unknown_obj, 0
+

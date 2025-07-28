@@ -17,7 +17,10 @@ from preprocessing.helpers.io_utils import read_json_file
 
 if __name__ == "__main__":
     metadata_paths = [
-        'data/organized/C351_U87_cyt/results/roi_frames/metadata.json'
+        'data/organized/C354_U251_cyt/results/roi_frames/metadata.json',
+        'data/organized/C356_U251_cyt/results/roi_frames/metadata.json',
+        'data/organized/C372_U251_evos/results/roi_frames/metadata.json',
+        'data/organized/C373_U251_evos/results/roi_frames/metadata.json'
     ]
 
 

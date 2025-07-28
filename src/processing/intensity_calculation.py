@@ -36,7 +36,7 @@ def get_avg_single_cell_intensity(lf_dir,
                                           template, microns_per_pixel, debug_well_detection=False)
 
         # no wells detected
-        if len(well_locs) == 0:
+        if not well_locs or len(well_locs) == 0:
             print(f"No wells detected for this frame.")
             continue
 

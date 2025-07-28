@@ -46,6 +46,16 @@ def save_raw_counts(well_fldpath: Union[Path, str],
     well_width_pixels = well_width_microns / microns_per_pixel
     bridge_width_pixels = bridge_width_microns / microns_per_pixel
     cell_line = params_dict.get("cell_line", None)
+    if cell_line is not None:
+        cell_line = cell_line.lower()
+    else:
+        cell_line = params_dict.get("cell_lines", {}).get(well_id, None)
+        if not cell_line:
+            print(f"ERROR: 'cell_line' not provided and no entry found for well '{well_id}' in 'cell_lines'.")
+            sys.exit(1)
+        else:
+            cell_line = cell_line.lower()
+            print(f"Cell line for well {well_id} is {cell_line}.\n")
     model_path = os.path.join(model_dir, cell_line.lower(), "random_forests", 'model.pkl')
 
     # count cells for each day folder in the well folder
@@ -70,24 +80,8 @@ def save_raw_counts(well_fldpath: Union[Path, str],
             fluo_channel = params_dict.get("fluo_dir", None)
             fluo_dir = day_fldpath / fluo_channel if fluo_channel is not None else None
 
-            if cell_line is not None:
-                cell_line = cell_line.lower()
-            else:
-                cell_line = params_dict.get("cell_lines", {}).get(well_id, None)
-                if not cell_line:
-                    print(f"ERROR: 'cell_line' not provided and no entry found for well '{well_id}' in 'cell_lines'.")
-                    sys.exit(1)
-                else:
-                    cell_line = cell_line.lower()
-                    print(f"Cell line for well {well_id} is {cell_line}.\n")
-
             # if fluroscent folder does not exist, set intensity to None
-            if fluo_dir is None or not fluo_dir.exists():
-                print(f"Fluorescent directory not found. Cells will be counted using label free channel.")
-                model = None
-                avg_sc_intensity = None
-                cellpose_model = load_cellpose_model()
-            else:
+            if fluo_dir is not None and fluo_dir.exists():
                 model = None
                 # load cell classification model and templates
                 try:
@@ -111,6 +105,12 @@ def save_raw_counts(well_fldpath: Union[Path, str],
                     debug=debug_cell_count
                 )
                 cellpose_model=None
+
+            else:
+                print(f"Fluorescent directory not found. Cells will be counted using label free channel for {curr_sname}.")
+                model = None
+                avg_sc_intensity = None
+                cellpose_model = load_cellpose_model()
 
             # create output directory
             session_out_dir = out_dir / well_id / 'raw_counts' / curr_sname
@@ -137,7 +137,7 @@ def save_raw_counts(well_fldpath: Union[Path, str],
                                                   model=model, out_dir=session_out_dir, debug=debug_cell_count, save_cropped_wells=True,
                                                   write_results=True)
                         else:
-                            flow_threshold = 0.8
+                            flow_threshold = 0.75
                             cellprob_threshold = 0.0
                             tile_norm_blocksize = 0
                             save_cell_counts_labelfree(cellpose_model,
@@ -171,10 +171,8 @@ def save_raw_counts(well_fldpath: Union[Path, str],
 
 if __name__ == "__main__":
     metadata_paths = [
-        'data/organized/C351_U87_cyt/roi_frames/metadata.json',
-        'data/organized/C353_U87_cyt/roi_frames/metadata.json',
-        'data/organized/C366_U87_evos/roi_frames/metadata.json',
-        'data/organized/C367_U87_evos/roi_frames/metadata.json'
+        'data/organized/C356_U251_cyt/roi_frames/metadata.json',
+        'data/organized/C373_U251_evos/roi_frames/metadata.json'
     ]
 
     for metadata_path in metadata_paths:
@@ -190,7 +188,7 @@ if __name__ == "__main__":
         params = read_json_file(args.meta_data)
 
         params["lf_dir"] = "bright field"
-
+        # params["fluo_dir"] = "dapi"
         metadata_path = Path(args.meta_data)
         device_dir = metadata_path.parents[1]
         frame_type = metadata_path.parent.name

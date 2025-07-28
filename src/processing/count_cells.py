@@ -13,7 +13,7 @@ from matplotlib import pyplot as plt
 import matplotlib.cm as cm
 from preprocessing.coeffs.sc_filter_params import area_coeffs
 from preprocessing.helpers.processing_utils import disp_img
-from processing.estimate_counts_area_ar import count_tpr_optimized
+from processing.estimate_counts_area_ar import count_tpr_simple, count_tpr_optimized
 
 import warnings
 
@@ -327,6 +327,7 @@ def save_cell_counts_labelfree(
     csv_filename_combined = out_dir / f"{image_name}_counts.csv"
 
     half_width = round(well_width_pixels // 2)
+    well_area = well_width_pixels**2
 
     def process_crop(well_coord):
         x_w, y_w = well_coord
@@ -355,29 +356,23 @@ def save_cell_counts_labelfree(
         x_w, y_w, cropped, resized = crop_meta[i]
         mask = masks_list[i]
         flow = flows_list[i]
-        valid_cell_areas = []
+
 
         resize_factor = resized.size / cropped.size
-
+        circularity = None
         if mask is not None and np.max(mask) > 0:
             props = regionprops(mask)
             unknown_obj = False
+
+            num_cells = 0
+
             for prop in props:
-                area = prop.area
-                perimeter = prop.perimeter if prop.perimeter > 0 else 1
-                circularity = 4 * np.pi * area / (perimeter ** 2)
+                obj_type, count = count_tpr_simple(prop, avg_area_in_pixels, resize_factor, well_area)
 
-                is_large_enough = area >= 0.55 * avg_area_in_pixels*resize_factor
-                is_round_enough = circularity > 0.5  # you can tune this threshold
+                # update count and object type
+                num_cells += count
+                unknown_obj = unknown_obj or obj_type
 
-                if is_large_enough and is_round_enough:
-                    valid_cell_areas.append(area)
-
-                # if object is large enough but not round enough
-                if is_large_enough and not is_round_enough:
-                    unknown_obj = True
-
-            num_cells = len(valid_cell_areas)
             if num_cells == 0:
                 if not unknown_obj:
                     label = 'empty'  # debris or all masks too irregular
@@ -432,7 +427,11 @@ def save_cell_counts_labelfree(
             if save_flows:
                 flows_dir = class_dir / "flows"
                 flows_dir.mkdir(parents=True, exist_ok=True)
-                fig_path = flows_dir / f"{image_name}_x{x_w}_y{y_w}_flow_debug.png"
+
+                if circularity is not None:
+                    fig_path = flows_dir / f"{image_name}_x{x_w}_y{y_w}_{circularity:.2f}.png"
+                else:
+                    fig_path = flows_dir / f"{image_name}_x{x_w}_y{y_w}.png"
 
                 # use matplotlib for debugging
                 if debug:

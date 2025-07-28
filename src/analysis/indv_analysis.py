@@ -18,7 +18,7 @@ os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 from analysis.result_generation_helpers import generate_y_y_plot
 
 
-def combine_and_summarize_well_preds(folder_path, out_dir, params_dict, well_id, file_suffix='_labelfree_counts.csv'):
+def combine_and_summarize_well_preds(folder_path, out_dir, params_dict, well_id, file_suffix='_counts.csv'):
 
     device_id = params_dict["device_ID"]
     cluster_thresh = params_dict.get('clusters_thresh', 10)

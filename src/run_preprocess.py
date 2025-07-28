@@ -127,8 +127,8 @@ def organize_and_clean_data(
 if __name__ == "__main__":
     # PROVIDE METADATA PATHS
     metadata_paths = [
-        'data/C96005_U87_U251_cyt/96WP_metadata_cyt.json',
-        'data/C96005_U87_U251_evos/C96005_metadata.json'
+        'data/C96004_U87_U251_20x_evos/96WP_metadata_evos.json',
+        'data/C96004_U87_U251_10x_evos/96WP_metadata_evos.json'
     ]
 
     # provide channel names for well detection and counting

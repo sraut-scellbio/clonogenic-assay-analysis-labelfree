@@ -13,5 +13,5 @@ def load_cellpose_model():
     if not core.use_gpu():
         raise RuntimeError("GPU not available. Please ensure you have a CUDA-compatible GPU and PyTorch with CUDA installed.")
 
-    model = models.CellposeModel(gpu=True, pretrained_model='sam')  # Use 'sam' for Cellpose-SAM
+    model = models.CellposeModel(gpu=True)  # Use 'sam' for Cellpose-SAM
     return model
