@@ -5,14 +5,12 @@ results/
 images/
 Images/
 template/
-templates/
 
 # Ignore data directories
 Data/
 data/
 
 # Ignore model directories and checkpoints
-models/
 pretrained_models/
 *.ckpt  # PyTorch Lightning model checkpoints
 *.pth   # PyTorch model weights
