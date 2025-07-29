@@ -1,3 +1,4 @@
+import cv2
 import numpy as np
 from preprocessing.coeffs.sc_filter_params import area_coeffs, aspect_ratio_coeffs, distr_coeffs
 
@@ -133,10 +134,16 @@ def count_tpr_simple(prop, avg_area_in_pixels, resize_factor, well_area_in_pixel
     circularity = 4 * np.pi * area / (perimeter ** 2)
 
     # calculate aspect ratio
-    min_row, min_col, max_row, max_col = prop.bbox
-    height = max_row - min_row
-    width = max_col - min_col
-    cnt_ar = width / height if height > 0 else 0
+    # convert binary mask to contour for this object
+    mask = prop.image.astype(np.uint8)  # binary mask for the object
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    if contours and len(contours[0]) >= 5:  # OpenCV requires at least 5 points for a valid rot rect
+        rect = cv2.minAreaRect(contours[0])
+        (center), (width, height), angle = rect
+        cnt_ar = max(width, height) / min(width, height) if min(width, height) > 0 else 0
+    else:
+        cnt_ar = 0  # fallback if contour fails
 
     min_area =  0.55 * avg_area_in_pixels*resize_factor
     max_area = 0.35 * well_area_in_pixels*resize_factor
@@ -151,7 +158,7 @@ def count_tpr_simple(prop, avg_area_in_pixels, resize_factor, well_area_in_pixel
         elif min_area <= area <= max_area:
 
             # acceptable aspect ratio for single
-            if 0.55 < cnt_ar < 1.75:
+            if 0.6 <= cnt_ar <= 1.5:
                 if verbose: print("Acceptable area, but high AR. Count = 2.")
                 return unknown_obj, 1
 
@@ -162,11 +169,18 @@ def count_tpr_simple(prop, avg_area_in_pixels, resize_factor, well_area_in_pixel
 
         # Rule 3: Too small area
         else:
-            if verbose: print("Area too small. Count = 1.")
-            unknown_obj = True
+            if verbose: print("Area too small. Count = 0")
             return unknown_obj, 0
 
+    # non-circular object
     else:
-        unknown_obj = True
+        # non-small unknown object
+        if area > min_area:
+            unknown_obj = True
+
+        # small unknown object might be debris or empty
+        else:
+            unknown_obj = False
+
         return unknown_obj, 0
 
