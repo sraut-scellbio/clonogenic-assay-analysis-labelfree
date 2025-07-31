@@ -171,8 +171,7 @@ def save_raw_counts(well_fldpath: Union[Path, str],
 
 if __name__ == "__main__":
     metadata_paths = [
-        'data/organized/C356_U251_cyt/roi_frames/metadata.json',
-        'data/organized/C373_U251_evos/roi_frames/metadata.json'
+        'data/organized/06_24_25_C96004_evos_SCB_TMZ-set1_u87_2025-07-25_15-48-30/C96004/roi_frames/metadata.json'
     ]
 
     for metadata_path in metadata_paths:
