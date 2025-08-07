@@ -11,7 +11,7 @@ from typing import Union
 from natsort import natsorted
 from argparse import ArgumentParser
 
-
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 PROJECT_ROOT = Path(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 sys.path.append(str(PROJECT_ROOT))
@@ -110,7 +110,7 @@ def save_raw_counts(well_fldpath: Union[Path, str],
                 print(f"Fluorescent directory not found. Cells will be counted using label free channel for {curr_sname}.")
                 model = None
                 avg_sc_intensity = None
-                cellpose_model = load_cellpose_model()
+                cellpose_model = load_cellpose_model(models_dir)
 
             # create output directory
             session_out_dir = out_dir / well_id / 'raw_counts' / curr_sname
@@ -171,7 +171,8 @@ def save_raw_counts(well_fldpath: Union[Path, str],
 
 if __name__ == "__main__":
     metadata_paths = [
-        'data/organized/06_24_25_C96004_evos_SCB_TMZ-set1_u87_2025-07-25_15-48-30/C96004/roi_frames/metadata.json'
+        'data/organized/C367_U87_evos/roi_frames/metadata.json',
+        'data/organized/C373_U251_evos/roi_frames/metadata.json'
     ]
 
     for metadata_path in metadata_paths:
