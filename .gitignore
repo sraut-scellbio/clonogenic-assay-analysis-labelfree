@@ -5,6 +5,7 @@ results/
 images/
 Images/
 template/
+models/
 
 # Ignore data directories
 Data/
